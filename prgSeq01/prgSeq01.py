@@ -7,6 +7,7 @@ con la clase BlackLightControl. El control de porcentaje está invertido:
 
 import time
 from machine import Pin
+from lib.Neopixel.neopixel import Neopixel
 from lib.BlackLight.BlackLightControl import BlackLightControl
 
 
@@ -19,13 +20,24 @@ LIGHT_ON_PERCENT = 50
 RAMP_STEP_PERCENT = 1
 RAMP_TIME_SECONDS = 0.5
 
-WAKE_HOLD_SECONDS = 2
-SLEEP_HOLD_SECONDS = 3
+WAKE_HOLD_SECONDS = 0.5
+SLEEP_HOLD_SECONDS = 2
 POLL_DELAY_SECONDS = 0.05
+
+orange = (255, 50, 0)
+yellow = (255, 150, 0)
+cian = (0, 255, 255)
+violet = (200, 0, 100)
+wite= (120,120,120)
+Off=(0,0,0)
+red = (255,0,0)
+green = (0, 255,0)
+blue = (0, 0, 255)
 
 
 bSensor = Pin(SWITCH_PIN, Pin.IN)
 BlackLight = BlackLightControl(BLACK_LIGHT_PIN, BLACK_LIGHT_FREQUENCY)
+Ready = Neopixel(1, 1, 16, "GRB")
 
 
 def _ticks_ms():
@@ -84,22 +96,27 @@ def main():
     """Ejecuta la secuencia alternando entre WakeUp y Sleep por GPIO 27."""
     light_is_on = False
     BlackLight.set_percent(LIGHT_OFF_PERCENT)
+    Ready.brightness(10)
+    Ready.fill(cian)
+    Ready.show()
 
     while True:
         if light_is_on:
             wait_for_high_hold(SLEEP_HOLD_SECONDS)
             fbiSleep()
+            Ready.fill(red)
             light_is_on = False
             wait_for_low()
         else:
             wait_for_high_hold(WAKE_HOLD_SECONDS)
             fbiWakeUp()
+            Ready.fill(green)
             light_is_on = True
             wait_for_low()
+        Ready.show()
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        BlackLight.deinit()
+try:
+    main()
+finally:
+    BlackLight.deinit()

@@ -3,6 +3,7 @@
 
 import time
 from NeoPixel.neopixel import Neopixel
+from lib.Neopixel.neopixel import Neopixel
 
 numpix = 32
 strip = Neopixel(numpix, 0, 29, "RGB")

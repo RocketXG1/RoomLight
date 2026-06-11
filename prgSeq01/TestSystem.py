@@ -122,8 +122,10 @@ while True:
     
     MonStart()      
     #BlackLight.ramp_percent(1,0.5,100,90)
+    BlackLight.ramp_percent()
     MonSleep() 
     #BlackLight.ramp_percent(1,0.5,90,100)
+    BlackLight.ra
     
     
    # if bSensor.value():
