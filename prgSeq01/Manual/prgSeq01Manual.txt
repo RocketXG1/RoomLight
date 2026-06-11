@@ -1,263 +1,442 @@
 FINALIDAD DEL CODIGO
 ====================
-El archivo prgSeq01.py tiene como finalidad controlar una luz negra por PWM
-usando la clase BlackLightControl y un switch conectado al GPIO 27.
+El archivo prgSeq01.py implementa una secuencia de control para una luz negra y
+un indicador NeoPixel en una placa compatible con MicroPython.
 
-La secuencia inicia apagando la luz con set_percent(100), porque en este
-hardware el porcentaje esta invertido: 100 % representa luz apagada y 50 %
-representa luz encendida. Despues de iniciar, el programa queda escuchando el
-GPIO 27. Si la entrada permanece en alto durante 2 segundos cuando la luz esta
-apagada, se ejecuta fbiWakeUp() una sola vez y el estado interno cambia a On.
-Si la entrada permanece en alto durante 3 segundos o mas cuando la luz esta
-encendida, se ejecuta fbiSleep() una sola vez y el estado interno cambia a Off.
+La finalidad principal del codigo es:
+1. Leer un switch digital conectado al GPIO 27.
+2. Controlar una luz negra por PWM usando el pin 28 y la clase
+   BlackLightControl.
+3. Mantener un estado interno de la luz: apagada o encendida.
+4. Ejecutar una rampa cuando el switch permanece en alto durante un tiempo
+   definido.
+5. Mostrar el estado del sistema en un NeoPixel conectado al GPIO 16.
 
-Despues de ejecutar cualquiera de las dos acciones, el programa exige que la
-senal bSensor pase a bajo antes de permitir una nueva cuenta. Esto evita que un
-switch que se queda en alto cambie inmediatamente otra vez el estado. Si el
-switch baja antes de llegar al tiempo objetivo, el temporizador se restablece y
-la siguiente activacion debe iniciar la cuenta desde cero.
+Funcionamiento general:
+- Al iniciar, la luz negra se coloca en LIGHT_OFF_PERCENT = 100.
+- En este hardware el porcentaje esta invertido: 100 % representa la luz
+  apagada y 50 % representa la luz encendida.
+- El NeoPixel se configura con brillo bajo y color cian para indicar que el
+  sistema esta listo.
+- Si la luz esta apagada, el programa espera que el switch permanezca en alto
+  durante WAKE_HOLD_SECONDS = 0.5 segundos. Cuando se cumple ese tiempo, llama
+  a fbiWakeUp(), cambia el NeoPixel a verde y marca el estado interno como
+  encendido.
+- Si la luz esta encendida, el programa espera que el switch permanezca en alto
+  durante SLEEP_HOLD_SECONDS = 2 segundos. Cuando se cumple ese tiempo, llama a
+  fbiSleep(), cambia el NeoPixel a rojo y marca el estado interno como apagado.
+- Despues de cada cambio, wait_for_low() obliga a que el switch vuelva a bajo
+  antes de aceptar una nueva activacion. Esto evita cambios repetidos si el
+  switch se queda presionado o si la senal permanece en alto.
 
 
 CLASES, MODULOS IMPORTADOS E INSTANCIAS
 =======================================
+
 Linea 8: import time
 --------------------
-Importa el modulo time de MicroPython. Este modulo se usa para medir tiempo y
-para pausar la ejecucion del programa. En este codigo se utiliza con:
-- time.ticks_ms(): obtiene un contador interno en milisegundos.
-- time.ticks_diff(actual, inicial): calcula la diferencia entre dos contadores
-  de ticks de forma segura aunque el contador interno tenga overflow.
-- time.sleep(segundos): espera una cantidad de segundos antes de continuar.
+Importa el modulo time de MicroPython. Este modulo no se instancia; se usa
+directamente llamando a sus funciones.
+
+En prgSeq01.py se utiliza para:
+- time.ticks_ms(): leer el contador interno de milisegundos.
+- time.ticks_diff(actual, inicial): calcular diferencias entre ticks de forma
+  segura ante overflow.
+- time.sleep(segundos): pausar la ejecucion entre lecturas del switch.
 
 Linea 9: from machine import Pin
 --------------------------------
-Importa la clase Pin del modulo machine. Pin permite configurar y leer pines
-GPIO del microcontrolador. En este codigo se usa para crear la entrada del
-switch conectado al GPIO 27.
+Importa la clase Pin del modulo machine. Pin permite configurar y manipular
+pines GPIO del microcontrolador.
 
-Instancia de Pin en la linea 27:
-    bSensor = Pin(SWITCH_PIN, Pin.IN)
+Metodo usado en este codigo:
+- value(): lee el estado logico del pin. Devuelve 0 cuando esta en bajo y un
+  valor verdadero cuando esta en alto.
 
-Esta instancia crea el objeto bSensor. SWITCH_PIN vale 27, por lo tanto bSensor
-lee el GPIO 27. Pin.IN configura el pin como entrada digital. El metodo usado
-de esta instancia es:
-- bSensor.value(): lee el estado del pin. Si regresa 1 o True, la entrada esta
-  en alto; si regresa 0 o False, la entrada esta en bajo.
+Instancia creada:
+- Linea 38: bSensor = Pin(SWITCH_PIN, Pin.IN)
+  Crea un objeto Pin llamado bSensor usando SWITCH_PIN, que vale 27. El segundo
+  argumento, Pin.IN, configura el GPIO 27 como entrada digital. Esta instancia
+  se usa en wait_for_high_hold() y wait_for_low() para saber si el switch esta
+  alto o bajo.
 
-Linea 10: from lib.BlackLight.BlackLightControl import BlackLightControl
+Linea 10: from lib.Neopixel.neopixel import Neopixel
+----------------------------------------------------
+Importa la clase Neopixel desde la libreria local lib/Neopixel/neopixel.py. La
+clase Neopixel controla LEDs direccionables mediante PIO/state machine.
+
+Metodos de Neopixel usados en este codigo:
+- brightness(valor): ajusta el brillo global que se aplica al actualizar los
+  LEDs. En este codigo se llama como Ready.brightness(10), por lo que el LED se
+  muestra con brillo bajo.
+- fill(color): escribe el mismo color en todos los LEDs del objeto. Como Ready
+  se instancia con un solo LED, fill() cambia el color de ese unico indicador.
+- show(): envia al hardware el contenido guardado en el buffer interno de
+  pixeles. Si se llama fill() pero no se llama show(), el color puede quedar en
+  memoria sin verse fisicamente en el LED.
+
+Instancia creada:
+- Linea 40: Ready = Neopixel(1, 1, 16, "GRB")
+  Crea un indicador NeoPixel llamado Ready.
+  Parametros usados:
+  - 1: numero de LEDs.
+  - 1: numero de state machine PIO usado por la libreria.
+  - 16: GPIO donde esta conectado el NeoPixel.
+  - "GRB": orden de color del LED. Muchos NeoPixel esperan los canales en
+    orden verde-rojo-azul en lugar de rojo-verde-azul.
+
+Linea 11: from lib.BlackLight.BlackLightControl import BlackLightControl
 ------------------------------------------------------------------------
-Importa la clase BlackLightControl desde el archivo lib/BlackLight/
-BlackLightControl.py. Esta clase encapsula el control PWM de la luz negra.
+Importa la clase BlackLightControl desde la libreria local
+lib/BlackLight/BlackLightControl.py. Esta clase encapsula el control PWM de la
+luz negra.
 
-Metodos importantes de BlackLightControl usados en este codigo:
-- __init__(pin, frequency=1000): inicializa el PWM en el pin indicado y define
-  la frecuencia. En este programa se instancia con pin 28 y frecuencia 1000 Hz.
-- set_percent(percent): fija directamente el porcentaje PWM. El codigo lo usa
-  al inicio con set_percent(100) para apagar la luz.
-- ramp_percent(step_percent, total_time_s, start_percent, end_percent): realiza
-  una rampa desde start_percent hasta end_percent usando pasos de porcentaje y
-  distribuyendo el movimiento durante total_time_s segundos.
-- deinit(): libera el PWM al salir del programa.
+Metodos de BlackLightControl usados en este codigo:
+- set_percent(percent): limita el porcentaje entre 0 y 100, lo convierte a duty
+  de 16 bits y lo aplica al PWM con duty_u16(). En este proyecto el hardware
+  esta invertido, por lo que set_percent(100) apaga la luz y set_percent(50) la
+  deja encendida al nivel requerido.
+- ramp_percent(step_percent, total_time_s, start_percent, end_percent): genera
+  una transicion gradual desde start_percent hasta end_percent. Internamente
+  calcula la direccion, el numero de pasos y el retardo entre pasos, llamando a
+  set_percent() en cada avance.
+- deinit(): libera el recurso PWM asociado al pin cuando el programa termina o
+  se interrumpe.
 
-Instancia de BlackLightControl en la linea 28:
-    BlackLight = BlackLightControl(BLACK_LIGHT_PIN, BLACK_LIGHT_FREQUENCY)
-
-BLACK_LIGHT_PIN vale 28 y BLACK_LIGHT_FREQUENCY vale 1000. Por lo tanto, esta
-instancia controla la luz negra en el pin 28 con una frecuencia PWM de 1000 Hz.
-
-
-CONSTANTES DEL CODIGO
-=====================
-Lineas 13 a 15:
-- BLACK_LIGHT_PIN = 28: pin PWM usado para la luz negra.
-- BLACK_LIGHT_FREQUENCY = 1000: frecuencia PWM en Hz.
-- SWITCH_PIN = 27: GPIO donde esta conectado el switch de entrada.
-
-Lineas 17 a 20:
-- LIGHT_OFF_PERCENT = 100: porcentaje usado para apagar la luz.
-- LIGHT_ON_PERCENT = 50: porcentaje usado para encender la luz.
-- RAMP_STEP_PERCENT = 1: paso de 1 % para las rampas.
-- RAMP_TIME_SECONDS = 0.5: duracion total de la rampa en segundos.
-
-Lineas 22 a 24:
-- WAKE_HOLD_SECONDS = 2: tiempo que el switch debe permanecer alto para llamar
-  fbiWakeUp() cuando la luz esta Off.
-- SLEEP_HOLD_SECONDS = 3: tiempo que el switch debe permanecer alto para llamar
-  fbiSleep() cuando la luz esta On.
-- POLL_DELAY_SECONDS = 0.05: pausa entre lecturas del GPIO 27. Equivale a 50 ms
-  y evita que el ciclo de escucha consuma CPU innecesariamente.
+Instancia creada:
+- Linea 39: BlackLight = BlackLightControl(BLACK_LIGHT_PIN,
+  BLACK_LIGHT_FREQUENCY)
+  Crea el controlador de la luz negra en el GPIO 28 con frecuencia PWM de
+  1000 Hz. Esta instancia se usa para set_percent(), ramp_percent() y deinit().
 
 
-EXPLICACION DE FUNCIONES
-========================
-Funcion _ticks_ms() - lineas 31 a 33
-------------------------------------
-Esta funcion regresa time.ticks_ms(). Su objetivo es centralizar la lectura del
-contador de milisegundos de MicroPython.
+CONSTANTES Y VARIABLES GLOBALES
+===============================
 
-Uso de ticks_ms:
-- time.ticks_ms() no se instancia como una clase; se llama como funcion del
-  modulo time.
-- Regresa un numero que representa milisegundos transcurridos en un contador
-  interno del microcontrolador.
-- Ese contador puede reiniciarse por overflow despues de cierto tiempo. Por eso
-  no es recomendable restar ticks manualmente.
-- En este codigo, _ticks_ms() se llama cuando el GPIO 27 pasa a alto para
-  guardar el momento inicial en la variable high_started_at.
+Lineas 14 a 16: pines y frecuencia
+----------------------------------
+- BLACK_LIGHT_PIN = 28: pin PWM donde esta conectada la luz negra.
+- BLACK_LIGHT_FREQUENCY = 1000: frecuencia PWM en hercios.
+- SWITCH_PIN = 27: pin de entrada donde esta conectado el switch.
 
-Funcion _elapsed_seconds(start_ticks) - lineas 36 a 38
-------------------------------------------------------
-Calcula cuantos segundos han pasado desde start_ticks. Internamente usa:
-    time.ticks_diff(time.ticks_ms(), start_ticks) / 1000
-
-Como funciona:
-- time.ticks_ms() obtiene el tick actual.
-- time.ticks_diff(actual, start_ticks) calcula la diferencia en milisegundos.
-- La division entre 1000 convierte milisegundos a segundos.
-- ticks_diff se usa porque maneja correctamente el overflow del contador de
-  ticks, algo que una resta directa podria calcular mal.
-
-Funcion fbiWakeUp() - lineas 41 a 48
-------------------------------------
-Esta funcion ejecuta la rampa para cambiar al estado On. Llama al metodo
-BlackLight.ramp_percent con los parametros requeridos:
-- step_percent = 1
-- total_time_s = 0.5
-- start_percent = 50
-- end_percent = 100
-
-Debido a que el hardware esta invertido, estos valores son los solicitados para
-la accion de WakeUp. La funcion no contiene ciclos adicionales, por lo que cada
-vez que se llama ejecuta una sola rampa.
-
-Funcion fbiSleep() - lineas 51 a 58
+Lineas 18 a 21: porcentajes y rampa
 -----------------------------------
-Esta funcion ejecuta la rampa para cambiar al estado Off. Llama al metodo
-BlackLight.ramp_percent con los parametros requeridos:
-- step_percent = 1
-- total_time_s = 0.5
-- start_percent = 100
-- end_percent = 50
+- LIGHT_OFF_PERCENT = 100: porcentaje usado para apagar la luz negra en este
+  hardware invertido.
+- LIGHT_ON_PERCENT = 50: porcentaje usado para encender la luz negra al nivel
+  requerido.
+- RAMP_STEP_PERCENT = 1: incremento o decremento porcentual de cada paso de la
+  rampa.
+- RAMP_TIME_SECONDS = 0.5: tiempo total aproximado que debe durar cada rampa.
 
-La funcion se llama una sola vez cuando el switch permanece en alto durante 3
-segundos o mas y el estado interno indica que la luz esta On.
+Lineas 23 a 25: tiempos de lectura del switch
+---------------------------------------------
+- WAKE_HOLD_SECONDS = 0.5: tiempo que el switch debe permanecer en alto para
+  ejecutar fbiWakeUp() cuando la luz esta apagada.
+- SLEEP_HOLD_SECONDS = 2: tiempo que el switch debe permanecer en alto para
+  ejecutar fbiSleep() cuando la luz esta encendida.
+- POLL_DELAY_SECONDS = 0.05: pausa de 50 ms entre lecturas del switch. Reduce
+  consumo de CPU y evita leer en un ciclo excesivamente rapido.
 
-Funcion wait_for_high_hold(hold_seconds) - lineas 61 a 74
+Lineas 27 a 35: colores RGB
+---------------------------
+Estas variables guardan colores como tuplas RGB con el formato (rojo, verde,
+azul). Se usan principalmente con Ready.fill(color).
+- orange = (255, 50, 0): naranja.
+- yellow = (255, 150, 0): amarillo anaranjado.
+- cian = (0, 255, 255): cian, usado al inicio para indicar listo.
+- violet = (200, 0, 100): violeta.
+- wite = (120, 120, 120): blanco/gris. El nombre parece querer decir white.
+- Off = (0, 0, 0): apagado.
+- red = (255, 0, 0): rojo, usado despues de fbiSleep().
+- green = (0, 255, 0): verde, usado despues de fbiWakeUp().
+- blue = (0, 0, 255): azul.
+
+
+EXPLICACION DE FUNCIONES DEL CODIGO ACTUAL
+==========================================
+
+Funcion _ticks_ms() - lineas 43 a 45
+------------------------------------
+Objetivo:
+- Centralizar la llamada a time.ticks_ms().
+
+Codigo:
+- def _ticks_ms(): define una funcion auxiliar sin parametros.
+- La cadena de documentacion indica que regresa el contador de milisegundos
+  compatible con MicroPython.
+- return time.ticks_ms() llama al modulo time y devuelve el tick actual.
+
+Uso dentro del programa:
+- Se llama en la linea 80 cuando bSensor pasa a alto por primera vez. El valor
+  devuelto se guarda en high_started_at para recordar el momento inicial de la
+  activacion.
+
+Funcion _elapsed_seconds(start_ticks) - lineas 48 a 50
+------------------------------------------------------
+Objetivo:
+- Calcular cuantos segundos han pasado desde un tick inicial.
+
+Parametro:
+- start_ticks: valor previamente obtenido con _ticks_ms() o time.ticks_ms().
+
+Codigo:
+- def _elapsed_seconds(start_ticks): define la funcion y recibe el tick inicial.
+- La cadena de documentacion indica que usa ticks_diff para manejar overflow.
+- return time.ticks_diff(time.ticks_ms(), start_ticks) / 1000 obtiene el tick
+  actual, calcula la diferencia en milisegundos y la convierte a segundos.
+
+Uso dentro del programa:
+- Se llama en la linea 81 para saber si la senal ha permanecido en alto durante
+  hold_seconds.
+
+Funcion fbiWakeUp() - lineas 53 a 60
+------------------------------------
+Objetivo:
+- Ejecutar la rampa asociada al cambio hacia el estado encendido.
+
+Codigo:
+- def fbiWakeUp(): define la funcion sin parametros.
+- La documentacion dice que enciende la luz con rampa de 50 % a 100 %.
+- BlackLight.ramp_percent(...) llama al metodo de la instancia BlackLight.
+- RAMP_STEP_PERCENT vale 1, por lo que la rampa avanza de 1 % en 1 %.
+- RAMP_TIME_SECONDS vale 0.5, por lo que la rampa dura aproximadamente medio
+  segundo.
+- start_percent=LIGHT_ON_PERCENT usa 50 como porcentaje inicial.
+- end_percent=LIGHT_OFF_PERCENT usa 100 como porcentaje final.
+
+Nota importante:
+- Aunque el texto de la funcion dice "enciende", el codigo usa porcentajes de
+  50 a 100 porque el hardware esta documentado como invertido. En este proyecto
+  se conservan esos valores de acuerdo con la logica actual del archivo.
+
+Funcion fbiSleep() - lineas 63 a 70
+-----------------------------------
+Objetivo:
+- Ejecutar la rampa asociada al cambio hacia el estado apagado.
+
+Codigo:
+- def fbiSleep(): define la funcion sin parametros.
+- La documentacion dice que apaga la luz con rampa de 100 % a 50 %.
+- BlackLight.ramp_percent(...) llama al metodo de la instancia BlackLight.
+- RAMP_STEP_PERCENT vale 1.
+- RAMP_TIME_SECONDS vale 0.5.
+- start_percent=LIGHT_OFF_PERCENT usa 100 como porcentaje inicial.
+- end_percent=LIGHT_ON_PERCENT usa 50 como porcentaje final.
+
+Nota importante:
+- Igual que en fbiWakeUp(), los porcentajes se interpretan con la logica de
+  hardware invertido descrita al inicio del archivo.
+
+Funcion wait_for_high_hold(hold_seconds) - lineas 73 a 86
 ---------------------------------------------------------
-Esta funcion deja el programa a la escucha del GPIO 27 hasta que el switch
-permanezca en alto durante el tiempo indicado por hold_seconds.
+Objetivo:
+- Esperar hasta que el switch permanezca en alto de forma continua durante el
+  tiempo indicado.
 
-Explicacion linea a linea de la logica:
+Parametro:
+- hold_seconds: cantidad de segundos que la senal debe mantenerse en alto.
+
+Explicacion de la logica:
 - high_started_at = None: indica que todavia no se ha detectado el inicio de
-  una presion en alto.
-- while True: mantiene la escucha de forma indefinida hasta cumplir el tiempo.
-- if bSensor.value(): si el GPIO 27 esta en alto, se empieza o continua el
-  conteo.
-- if high_started_at is None: si es el primer momento detectado en alto, se
-  guarda el tick actual con _ticks_ms().
-- elif _elapsed_seconds(high_started_at) >= hold_seconds: si el tiempo en alto
-  ya alcanzo el objetivo, la funcion termina con return.
-- else: si el GPIO 27 esta en bajo, se reinicia high_started_at en None para
-  obligar a que la siguiente activacion tenga que permanecer en alto desde cero.
-  Con esto, las cuentas no se van sumando entre pulsos separados.
-- time.sleep(POLL_DELAY_SECONDS): pausa de 50 ms antes de volver a leer la
-  entrada.
+  una senal alta continua.
+- while True: crea un ciclo de espera que solo termina con return.
+- if bSensor.value(): lee el GPIO 27. Si el switch esta en alto, entra al bloque
+  de conteo.
+- if high_started_at is None: si es el primer ciclo en alto, guarda el momento
+  actual con _ticks_ms().
+- elif _elapsed_seconds(high_started_at) >= hold_seconds: si la senal lleva en
+  alto al menos el tiempo requerido, termina la funcion con return.
+- else: si bSensor.value() es falso, significa que la senal esta en bajo.
+- high_started_at = None: reinicia la cuenta cuando la senal baja. Esto obliga a
+  que el siguiente intento permanezca en alto desde cero, sin acumular tiempos
+  de pulsos separados.
+- time.sleep(POLL_DELAY_SECONDS): espera 0.05 segundos antes de volver a leer.
 
-Funcion wait_for_low() - lineas 77 a 80
+Funcion wait_for_low() - lineas 89 a 92
 ---------------------------------------
-Esta funcion espera a que bSensor vuelva a bajo despues de ejecutar una accion.
-Mientras bSensor.value() siga en alto, el programa permanece en espera con una
-pausa de 50 ms. Esta funcion es la que impide que un switch mantenido en alto
-active inmediatamente el siguiente cambio de estado. Primero debe soltarse el
-switch, o la senal debe bajar, y solo despues el programa puede volver a contar.
+Objetivo:
+- Bloquear el programa hasta que el switch vuelva a bajo.
 
-Funcion main() - lineas 83 a 98
--------------------------------
-Es la funcion principal de la secuencia.
+Explicacion:
+- while bSensor.value(): mientras el GPIO 27 siga en alto, el programa no sale
+  de esta funcion.
+- time.sleep(POLL_DELAY_SECONDS): espera 0.05 segundos entre lecturas.
 
-Explicacion de funcionamiento:
-- light_is_on = False: define que el estado inicial interno de la luz es Off.
-- BlackLight.set_percent(LIGHT_OFF_PERCENT): apaga fisicamente la luz al inicio
-  usando set_percent(100).
-- while True: mantiene la secuencia activa para escuchar el switch siempre.
-- if light_is_on: si el estado interno esta On, espera una presion alta de 3
-  segundos, llama fbiSleep(), cambia light_is_on a False y llama wait_for_low()
-  para exigir que la senal baje antes de aceptar otra cuenta.
-- else: si el estado interno esta Off, espera una presion alta de 2 segundos,
-  llama fbiWakeUp(), cambia light_is_on a True y llama wait_for_low() para
-  exigir que la senal baje antes de aceptar otra cuenta.
+Importancia:
+- Evita que una misma presion larga o una senal mantenida en alto active dos
+  cambios de estado consecutivos.
 
-Bloque de ejecucion principal - lineas 101 a 105
-------------------------------------------------
-El bloque:
-    if __name__ == "__main__":
+Funcion main() - lineas 95 a 116
+--------------------------------
+Objetivo:
+- Coordinar la secuencia principal del sistema.
 
-permite que main() se ejecute solamente cuando prgSeq01.py se ejecuta como
-programa principal. Dentro se usa:
-- try: llama a main().
-- finally: llama a BlackLight.deinit() si el programa termina o se interrumpe.
+Explicacion:
+- light_is_on = False: define que el estado interno inicial es apagado.
+- BlackLight.set_percent(LIGHT_OFF_PERCENT): aplica 100 % al PWM para dejar la
+  luz negra en el estado inicial apagado segun la logica invertida.
+- Ready.brightness(10): baja el brillo del NeoPixel indicador.
+- Ready.fill(cian): coloca cian en el buffer del NeoPixel.
+- Ready.show(): envia el color cian al LED fisico.
+- while True: mantiene el programa ejecutandose permanentemente.
+- if light_is_on: si el estado interno indica que la luz esta encendida, espera
+  SLEEP_HOLD_SECONDS, ejecuta fbiSleep(), cambia el indicador a rojo, marca
+  light_is_on como False y espera a que el switch baje.
+- else: si el estado interno indica que la luz esta apagada, espera
+  WAKE_HOLD_SECONDS, ejecuta fbiWakeUp(), cambia el indicador a verde, marca
+  light_is_on como True y espera a que el switch baje.
+- Ready.show(): despues de fill(red) o fill(green), actualiza fisicamente el
+  NeoPixel con el color del nuevo estado.
 
-Esto ayuda a liberar el recurso PWM de la luz negra.
+Bloque try/finally - lineas 119 a 122
+-------------------------------------
+Objetivo:
+- Ejecutar main() y liberar el PWM al finalizar.
 
+Explicacion:
+- try: inicia un bloque protegido.
+- main(): arranca la secuencia principal. Como main() contiene while True, en
+  operacion normal no regresa.
+- finally: define codigo que debe ejecutarse si main() termina por una
+  interrupcion o excepcion.
+- BlackLight.deinit(): libera el recurso PWM de la luz negra.
 
-EXPLICACION LINEA A LINEA DEL ARCHIVO prgSeq01.py
-=================================================
-Lineas 1 a 6: comentario de documentacion general del archivo. Describe que la
-secuencia controla la luz negra, escucha GPIO 27 y usa porcentajes invertidos.
-Linea 8: importa el modulo time.
-Linea 9: importa la clase Pin para manejar GPIO.
-Linea 10: importa BlackLightControl desde la libreria de luz negra.
-Lineas 13 a 15: definen pines y frecuencia de trabajo.
-Lineas 17 a 20: definen porcentajes de luz y parametros de rampa.
-Lineas 22 a 24: definen tiempos de activacion del switch y pausa de lectura.
-Linea 27: crea bSensor como entrada digital en GPIO 27.
-Linea 28: crea BlackLight para controlar PWM en el pin 28 a 1000 Hz.
-Lineas 31 a 33: definen _ticks_ms(), funcion auxiliar para leer ticks.
-Lineas 36 a 38: definen _elapsed_seconds(), funcion auxiliar para medir tiempo
-transcurrido de forma segura.
-Lineas 41 a 48: definen fbiWakeUp(), que llama ramp_percent de 50 a 100.
-Lineas 51 a 58: definen fbiSleep(), que llama ramp_percent de 100 a 50.
-Lineas 61 a 74: definen wait_for_high_hold(), escucha GPIO 27 hasta que el alto
-se mantenga por el tiempo solicitado y reinicia el temporizador si la senal baja
-antes de cumplir el objetivo.
-Lineas 77 a 80: definen wait_for_low(), que bloquea la siguiente cuenta hasta
-que bSensor vuelva a bajo.
-Lineas 83 a 98: definen main(), inicializan apagado, alternan entre On y Off, y
-llaman wait_for_low() despues de cada accion para impedir cambios consecutivos
-con el switch mantenido en alto.
-Lineas 101 a 105: ejecutan main() como programa principal y liberan PWM al salir.
+Nota:
+- Este archivo llama a main() directamente al importarse o ejecutarse, porque no
+  usa un bloque if __name__ == "__main__". Por eso debe tratarse como programa
+  principal de la secuencia y no como una libreria para importar desde otro
+  modulo sin efectos secundarios.
 
 
-USO DEL CODIGO
-==============
-1. Colocar prgSeq01.py dentro de la carpeta prgSeq01 del proyecto.
-2. Verificar que el switch este conectado al GPIO 27.
-3. Verificar que la luz negra este conectada al pin PWM 28.
-4. Ejecutar prgSeq01.py en el microcontrolador compatible con MicroPython.
-5. Al iniciar, la luz se apaga con set_percent(100) y el estado queda Off.
-6. Mantener el switch en alto durante 2 segundos para llamar fbiWakeUp() una
-   sola vez y pasar el estado a On.
-7. Despues de fbiWakeUp(), bajar el switch. Si el switch sigue en alto, el
-   programa no inicia la cuenta para Sleep hasta que bSensor pase a bajo.
-8. Con la luz en estado On, mantener el switch en alto durante 3 segundos o mas
-   para llamar fbiSleep() una sola vez y regresar el estado a Off.
-9. Despues de fbiSleep(), bajar el switch. Si el switch sigue en alto, el
-   programa no inicia una nueva cuenta para WakeUp hasta que bSensor pase a bajo.
-10. Si el switch baja antes de cumplir los 2 o 3 segundos requeridos, el conteo
-    se reinicia y la siguiente activacion debe empezar desde cero.
-11. La secuencia vuelve siempre a la escucha despues de terminar cada rampa y
-    despues de confirmar que la senal bajo.
+USO DE ticks_ms, COMO FUNCIONA Y COMO SE "INSTANCIA"
+====================================================
+
+time.ticks_ms()
+---------------
+time.ticks_ms() es una funcion del modulo time de MicroPython. No es una clase
+y no se instancia con parentesis de constructor como Pin(...) o Neopixel(...).
+Su uso correcto es llamarla directamente:
+
+    tick_actual = time.ticks_ms()
+
+Que devuelve:
+- Un numero entero que representa el contador interno de milisegundos del
+  sistema.
+- Ese numero sirve para medir intervalos de tiempo, no para obtener una hora de
+  calendario.
+
+Por que no se debe restar directamente:
+- El contador de ticks puede desbordarse despues de cierto tiempo y volver a un
+  rango inicial.
+- Si se hace una resta normal, por ejemplo actual - inicial, el resultado puede
+  ser incorrecto cuando ocurre overflow.
+
+Forma segura de medir tiempo:
+
+    inicial = time.ticks_ms()
+    transcurrido_ms = time.ticks_diff(time.ticks_ms(), inicial)
+
+En este codigo:
+- _ticks_ms() envuelve time.ticks_ms() para obtener el tick inicial.
+- _elapsed_seconds(start_ticks) usa time.ticks_diff() para calcular la
+  diferencia de forma segura.
+- wait_for_high_hold() combina ambas funciones para validar que el switch haya
+  permanecido en alto durante el tiempo requerido.
+
+Como "instanciarlo" en el contexto del codigo:
+- ticks_ms no se instancia porque no es objeto ni clase.
+- Lo que si se hace es guardar una lectura del contador en una variable:
+
+    high_started_at = _ticks_ms()
+
+- high_started_at queda como una referencia temporal del inicio de la senal en
+  alto.
+- Despues, el codigo compara el tiempo actual contra esa referencia:
+
+    _elapsed_seconds(high_started_at) >= hold_seconds
+
+Este patron equivale a crear un punto de inicio para un temporizador sin usar
+una clase Timer.
 
 
-NOTAS IMPORTANTES
-=================
-- El programa esta pensado para MicroPython porque usa machine.Pin,
-  time.ticks_ms() y time.ticks_diff().
-- El hardware esta invertido: 100 % se documenta como apagado y 50 % como
-  encendido.
-- Si el switch baja antes de cumplir 2 o 3 segundos, el conteo se reinicia y no
-  se suma con futuras activaciones.
-- fbiWakeUp() y fbiSleep() no se repiten continuamente; se ejecutan una sola vez
-  cuando wait_for_high_hold() confirma el tiempo requerido.
-- Despues de cada accion, wait_for_low() obliga a que bSensor pase a bajo antes
-  de permitir otra cuenta.
+EXPLICACION LINEA A LINEA DE prgSeq01.py
+========================================
+
+Lineas 1 a 6:
+- Comentario de documentacion general del archivo. Indica que la secuencia
+  controla una luz negra, escucha el GPIO 27 y trabaja con porcentajes
+  invertidos.
+
+Linea 8:
+- Importa el modulo time para ticks_ms(), ticks_diff() y sleep().
+
+Linea 9:
+- Importa Pin para crear la entrada digital del switch.
+
+Linea 10:
+- Importa Neopixel para manejar el LED indicador conectado al GPIO 16.
+
+Linea 11:
+- Importa BlackLightControl para controlar la luz negra mediante PWM.
+
+Lineas 14 a 16:
+- Definen el pin de la luz negra, la frecuencia PWM y el pin del switch.
+
+Lineas 18 a 21:
+- Definen los porcentajes usados para apagar/encender y los parametros de la
+  rampa.
+
+Lineas 23 a 25:
+- Definen los tiempos que el switch debe mantenerse en alto y la pausa de
+  lectura.
+
+Lineas 27 a 35:
+- Definen colores RGB reutilizables para el NeoPixel.
+
+Linea 38:
+- Crea bSensor como entrada digital en GPIO 27.
+
+Linea 39:
+- Crea BlackLight como controlador PWM de la luz negra en GPIO 28 a 1000 Hz.
+
+Linea 40:
+- Crea Ready como un NeoPixel de 1 LED en GPIO 16, con state machine 1 y orden
+  de color GRB.
+
+Lineas 43 a 45:
+- Definen _ticks_ms(), que devuelve time.ticks_ms().
+
+Lineas 48 a 50:
+- Definen _elapsed_seconds(start_ticks), que calcula segundos transcurridos con
+  time.ticks_diff().
+
+Lineas 53 a 60:
+- Definen fbiWakeUp(), que llama a BlackLight.ramp_percent() usando paso de 1,
+  duracion de 0.5 segundos, inicio 50 y final 100.
+
+Lineas 63 a 70:
+- Definen fbiSleep(), que llama a BlackLight.ramp_percent() usando paso de 1,
+  duracion de 0.5 segundos, inicio 100 y final 50.
+
+Lineas 73 a 86:
+- Definen wait_for_high_hold(hold_seconds), que espera una senal alta continua
+  del switch durante el tiempo indicado. Si la senal baja, reinicia la cuenta.
+
+Lineas 89 a 92:
+- Definen wait_for_low(), que espera a que el switch vuelva a bajo antes de
+  permitir otro cambio de estado.
+
+Lineas 95 a 101:
+- Inician main(), declaran el estado interno apagado, apagan la luz negra,
+  ajustan el brillo del NeoPixel, cargan color cian y lo muestran.
+
+Lineas 103 a 116:
+- Ejecutan el ciclo principal. Si la luz esta encendida, esperan 2 segundos de
+  switch alto y ejecutan fbiSleep(). Si la luz esta apagada, esperan 0.5
+  segundos de switch alto y ejecutan fbiWakeUp(). En ambos casos actualizan el
+  color del NeoPixel y exigen que el switch vuelva a bajo.
+
+Lineas 119 a 122:
+- Ejecutan main() dentro de try/finally y llaman BlackLight.deinit() al final
+  para liberar el PWM.
