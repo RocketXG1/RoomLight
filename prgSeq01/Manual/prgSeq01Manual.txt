@@ -11,6 +11,12 @@ apagada, se ejecuta fbiWakeUp() una sola vez y el estado interno cambia a On.
 Si la entrada permanece en alto durante 3 segundos o mas cuando la luz esta
 encendida, se ejecuta fbiSleep() una sola vez y el estado interno cambia a Off.
 
+Despues de ejecutar cualquiera de las dos acciones, el programa exige que la
+senal bSensor pase a bajo antes de permitir una nueva cuenta. Esto evita que un
+switch que se queda en alto cambie inmediatamente otra vez el estado. Si el
+switch baja antes de llegar al tiempo objetivo, el temporizador se restablece y
+la siguiente activacion debe iniciar la cuenta desde cero.
+
 
 CLASES, MODULOS IMPORTADOS E INSTANCIAS
 =======================================
@@ -153,10 +159,19 @@ Explicacion linea a linea de la logica:
   ya alcanzo el objetivo, la funcion termina con return.
 - else: si el GPIO 27 esta en bajo, se reinicia high_started_at en None para
   obligar a que la siguiente activacion tenga que permanecer en alto desde cero.
+  Con esto, las cuentas no se van sumando entre pulsos separados.
 - time.sleep(POLL_DELAY_SECONDS): pausa de 50 ms antes de volver a leer la
   entrada.
 
-Funcion main() - lineas 77 a 90
+Funcion wait_for_low() - lineas 77 a 80
+---------------------------------------
+Esta funcion espera a que bSensor vuelva a bajo despues de ejecutar una accion.
+Mientras bSensor.value() siga en alto, el programa permanece en espera con una
+pausa de 50 ms. Esta funcion es la que impide que un switch mantenido en alto
+active inmediatamente el siguiente cambio de estado. Primero debe soltarse el
+switch, o la senal debe bajar, y solo despues el programa puede volver a contar.
+
+Funcion main() - lineas 83 a 98
 -------------------------------
 Es la funcion principal de la secuencia.
 
@@ -166,12 +181,14 @@ Explicacion de funcionamiento:
   usando set_percent(100).
 - while True: mantiene la secuencia activa para escuchar el switch siempre.
 - if light_is_on: si el estado interno esta On, espera una presion alta de 3
-  segundos, llama fbiSleep() y cambia light_is_on a False.
+  segundos, llama fbiSleep(), cambia light_is_on a False y llama wait_for_low()
+  para exigir que la senal baje antes de aceptar otra cuenta.
 - else: si el estado interno esta Off, espera una presion alta de 2 segundos,
-  llama fbiWakeUp() y cambia light_is_on a True.
+  llama fbiWakeUp(), cambia light_is_on a True y llama wait_for_low() para
+  exigir que la senal baje antes de aceptar otra cuenta.
 
-Bloque de ejecucion principal - lineas 93 a 97
-----------------------------------------------
+Bloque de ejecucion principal - lineas 101 a 105
+------------------------------------------------
 El bloque:
     if __name__ == "__main__":
 
@@ -201,9 +218,14 @@ transcurrido de forma segura.
 Lineas 41 a 48: definen fbiWakeUp(), que llama ramp_percent de 50 a 100.
 Lineas 51 a 58: definen fbiSleep(), que llama ramp_percent de 100 a 50.
 Lineas 61 a 74: definen wait_for_high_hold(), escucha GPIO 27 hasta que el alto
-se mantenga por el tiempo solicitado.
-Lineas 77 a 90: definen main(), inicializan apagado y alternan entre On y Off.
-Lineas 93 a 97: ejecutan main() como programa principal y liberan PWM al salir.
+se mantenga por el tiempo solicitado y reinicia el temporizador si la senal baja
+antes de cumplir el objetivo.
+Lineas 77 a 80: definen wait_for_low(), que bloquea la siguiente cuenta hasta
+que bSensor vuelva a bajo.
+Lineas 83 a 98: definen main(), inicializan apagado, alternan entre On y Off, y
+llaman wait_for_low() despues de cada accion para impedir cambios consecutivos
+con el switch mantenido en alto.
+Lineas 101 a 105: ejecutan main() como programa principal y liberan PWM al salir.
 
 
 USO DEL CODIGO
@@ -215,9 +237,16 @@ USO DEL CODIGO
 5. Al iniciar, la luz se apaga con set_percent(100) y el estado queda Off.
 6. Mantener el switch en alto durante 2 segundos para llamar fbiWakeUp() una
    sola vez y pasar el estado a On.
-7. Con la luz en estado On, mantener el switch en alto durante 3 segundos o mas
+7. Despues de fbiWakeUp(), bajar el switch. Si el switch sigue en alto, el
+   programa no inicia la cuenta para Sleep hasta que bSensor pase a bajo.
+8. Con la luz en estado On, mantener el switch en alto durante 3 segundos o mas
    para llamar fbiSleep() una sola vez y regresar el estado a Off.
-8. La secuencia vuelve siempre a la escucha despues de terminar cada rampa.
+9. Despues de fbiSleep(), bajar el switch. Si el switch sigue en alto, el
+   programa no inicia una nueva cuenta para WakeUp hasta que bSensor pase a bajo.
+10. Si el switch baja antes de cumplir los 2 o 3 segundos requeridos, el conteo
+    se reinicia y la siguiente activacion debe empezar desde cero.
+11. La secuencia vuelve siempre a la escucha despues de terminar cada rampa y
+    despues de confirmar que la senal bajo.
 
 
 NOTAS IMPORTANTES
@@ -226,6 +255,9 @@ NOTAS IMPORTANTES
   time.ticks_ms() y time.ticks_diff().
 - El hardware esta invertido: 100 % se documenta como apagado y 50 % como
   encendido.
-- Si el switch baja antes de cumplir 2 o 3 segundos, el conteo se reinicia.
+- Si el switch baja antes de cumplir 2 o 3 segundos, el conteo se reinicia y no
+  se suma con futuras activaciones.
 - fbiWakeUp() y fbiSleep() no se repiten continuamente; se ejecutan una sola vez
   cuando wait_for_high_hold() confirma el tiempo requerido.
+- Despues de cada accion, wait_for_low() obliga a que bSensor pase a bajo antes
+  de permitir otra cuenta.
