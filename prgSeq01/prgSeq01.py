@@ -74,6 +74,12 @@ def wait_for_high_hold(hold_seconds):
         time.sleep(POLL_DELAY_SECONDS)
 
 
+def wait_for_low():
+    """Espera a que el switch vuelva a bajo antes de aceptar otra cuenta."""
+    while bSensor.value():
+        time.sleep(POLL_DELAY_SECONDS)
+
+
 def main():
     """Ejecuta la secuencia alternando entre WakeUp y Sleep por GPIO 27."""
     light_is_on = False
@@ -84,10 +90,12 @@ def main():
             wait_for_high_hold(SLEEP_HOLD_SECONDS)
             fbiSleep()
             light_is_on = False
+            wait_for_low()
         else:
             wait_for_high_hold(WAKE_HOLD_SECONDS)
             fbiWakeUp()
             light_is_on = True
+            wait_for_low()
 
 
 if __name__ == "__main__":
