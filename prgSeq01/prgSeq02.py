@@ -13,43 +13,65 @@ from lib.Neopixel.neopixel import Neopixel
 from lib.BlackLight.BlackLightControl import BlackLightControl
 
 
+# GPIO que entrega la señal PWM al controlador de la luz negra.
 BLACK_LIGHT_PIN = 28
+# Frecuencia, en hercios, utilizada por la salida PWM.
 BLACK_LIGHT_FREQUENCY = 1000
+# GPIO de entrada conectado a la salida digital del sensor de movimiento.
 MOTION_SENSOR_PIN = 27
 
+# Porcentaje PWM que apaga la luz debido a la electronica inversa.
 LIGHT_OFF_PERCENT = 100
+# Porcentaje PWM que enciende la luz al nivel de trabajo deseado.
 LIGHT_ON_PERCENT = 50
+# Cambio porcentual aplicado en cada paso de una rampa.
 RAMP_STEP_PERCENT = 1
+# Duracion nominal, en segundos, de una rampa completa entre ON y OFF.
 RAMP_TIME_SECONDS = 1
 
-# Tiempo minimo que la salida permanece en ON despues de alcanzar el objetivo.
-# Cada nueva deteccion mientras esta en ON reinicia este tiempo.
+# Segundos que la salida permanece en ON; cada deteccion reinicia la cuenta.
 ON_HOLD_SECONDS = 30
+# Pausa corta entre iteraciones para limitar uso de CPU sin perder respuesta.
 LOOP_DELAY_SECONDS = 0.005
 
+# GPIO utilizado por el NeoPixel que informa el estado de la secuencia.
 READY_PIN = 16
+# Maquina de estados PIO reservada para controlar el NeoPixel.
 READY_STATE_MACHINE = 1
+# Brillo global aplicado al NeoPixel indicador.
 READY_BRIGHTNESS = 10
 
+# Color del NeoPixel durante la inicializacion del sistema.
 COLOR_READY = (0, 255, 255)
+# Color del NeoPixel cuando la salida se encuentra apagada.
 COLOR_OFF = (255, 0, 0)
+# Color del NeoPixel durante la rampa hacia encendido.
 COLOR_WAKING = (255, 150, 0)
+# Color del NeoPixel cuando la salida esta encendida y temporizada.
 COLOR_ON = (0, 255, 0)
+# Color del NeoPixel durante la rampa hacia apagado.
 COLOR_SLEEPING = (200, 0, 100)
 
+# Identificador del estado con la salida completamente apagada.
 STATE_OFF = 0
+# Identificador del estado de rampa hacia el nivel encendido.
 STATE_WAKING = 1
+# Identificador del estado encendido con temporizador de permanencia.
 STATE_ON_HOLD = 2
+# Identificador del estado de rampa hacia el nivel apagado.
 STATE_SLEEPING = 3
 
 
+# Entrada digital utilizada para leer e interrumpir por cambios del sensor.
 bSensor = Pin(MOTION_SENSOR_PIN, Pin.IN)
+# Controlador encargado de aplicar porcentajes y rampas a la salida PWM.
 BlackLight = BlackLightControl(BLACK_LIGHT_PIN, BLACK_LIGHT_FREQUENCY)
+# NeoPixel de un LED utilizado como indicador visual del estado actual.
 Ready = Neopixel(1, READY_STATE_MACHINE, READY_PIN, "GRB")
 
-# Estas variables se escriben en la interrupcion y se consumen en main(). La
-# interrupcion no ejecuta PWM, NeoPixel, esperas, impresiones ni rampas.
+# Ultimo nivel logico informado por el sensor; se actualiza desde el IRQ.
 _sensor_active = bool(bSensor.value())
+# Contador de flancos ascendentes para no perder detecciones entre iteraciones.
 _motion_sequence = 0
 
 
@@ -78,6 +100,7 @@ def _sensor_irq(pin):
     """
     global _sensor_active, _motion_sequence
 
+    # Nivel del sensor capturado en el instante en que ocurrio el flanco.
     active = bool(pin.value())
     _sensor_active = active
     if active:
@@ -86,7 +109,9 @@ def _sensor_irq(pin):
 
 def _ramp_interval_ms():
     """Calcula el intervalo que conserva la duracion nominal de la rampa."""
+    # Distancia porcentual total entre los niveles fisicos ON y OFF.
     distance = abs(LIGHT_OFF_PERCENT - LIGHT_ON_PERCENT)
+    # Cantidad de pasos necesarios, redondeada hacia arriba.
     steps = max(1, (distance + RAMP_STEP_PERCENT - 1) // RAMP_STEP_PERCENT)
     return max(1, _seconds_to_ms(RAMP_TIME_SECONDS) // steps)
 
@@ -116,6 +141,7 @@ def fbiSleep():
 
 def _show_state(state):
     """Actualiza el NeoPixel solamente cuando cambia el estado de secuencia."""
+    # Tabla que relaciona cada identificador de estado con su color indicador.
     colors = (
         COLOR_OFF,
         COLOR_WAKING,
@@ -130,10 +156,15 @@ def main():
     """Ejecuta el control por estados, temporizado y sin esperas bloqueantes."""
     global _sensor_active
 
+    # Estado logico inicial de la maquina de estados.
     state = STATE_OFF
+    # Ultimo estado mostrado; evita actualizar el NeoPixel innecesariamente.
     displayed_state = None
+    # Ultima deteccion procesada por main; permite reconocer una nueva.
     processed_motion_sequence = _motion_sequence
+    # Tick futuro hasta el que debe mantenerse la salida encendida.
     on_deadline = None
+    # Tiempo de permanencia convertido una sola vez a milisegundos.
     hold_ms = _seconds_to_ms(ON_HOLD_SECONDS)
 
     BlackLight.set_percent(LIGHT_OFF_PERCENT)
@@ -141,8 +172,7 @@ def main():
     Ready.fill(COLOR_READY)
     Ready.show()
 
-    # El IRQ escucha activacion y desactivacion. Su referencia se conserva para
-    # poder deshabilitarla de forma explicita al terminar la secuencia.
+    # Referencia al IRQ que escucha los flancos de activacion y desactivacion.
     sensor_irq = bSensor.irq(
         trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING,
         handler=_sensor_irq,
@@ -156,7 +186,9 @@ def main():
             state = STATE_WAKING
 
         while True:
+            # Tick comun de esta iteracion para rampas y temporizadores.
             now_ms = _ticks_ms()
+            # Indica si el IRQ registro una deteccion aun no procesada.
             motion_detected = processed_motion_sequence != _motion_sequence
             if motion_detected:
                 processed_motion_sequence = _motion_sequence
