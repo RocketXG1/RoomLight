@@ -71,7 +71,7 @@ Ready = Neopixel(1, READY_STATE_MACHINE, READY_PIN, "GRB")
 
 # Ultimo nivel logico informado por el sensor; se actualiza desde el IRQ.
 _sensor_active = bool(bSensor.value())
-# Contador de flancos ascendentes para no perder detecciones entre iteraciones.
+# Contador circular de 8 bits para registrar flancos ascendentes del sensor.
 _motion_sequence = 0
 
 
@@ -93,8 +93,8 @@ def _deadline_reached(now_ms, deadline_ms):
 def _sensor_irq(pin):
     """Registra cambios del sensor con el minimo trabajo dentro del IRQ.
 
-    Un flanco ascendente incrementa ``_motion_sequence`` para que main() no
-    pierda una deteccion aunque el sensor vuelva a bajo antes de procesarla.
+    Un flanco ascendente incrementa el contador circular ``_motion_sequence``
+    para que main() no pierda una deteccion aunque el sensor vuelva a bajo.
     Ambos flancos actualizan ``_sensor_active``. El trabajo de PWM se difiere al
     ciclo principal para mantener esta interrupcion corta y no bloqueante.
     """
@@ -104,7 +104,7 @@ def _sensor_irq(pin):
     active = bool(pin.value())
     _sensor_active = active
     if active:
-        _motion_sequence += 1
+        _motion_sequence = (_motion_sequence + 1) & 0xFF
 
 
 def _ramp_interval_ms():
