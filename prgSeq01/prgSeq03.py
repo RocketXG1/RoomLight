@@ -14,7 +14,7 @@ from lib.BlackLight.BlackLightControl import BlackLightControl
 BLACK_LIGHT_PIN = 16
 Relay_PIN = 17 
 BLACK_LIGHT_FREQUENCY = 1000
-SWITCH_PIN = 27
+SWITCH_PIN = 0
 
 LIGHT_OFF_PERCENT = 0
 LIGHT_ON_PERCENT = 100
