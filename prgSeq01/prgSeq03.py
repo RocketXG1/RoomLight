@@ -1,18 +1,17 @@
-"""Secuencia de control FBI para la luz negra.
+"""Secuencia FBI con PWM directo en GP16, relevador en GP17 y sensor en GP0.
 
-La secuencia escucha el GPIO 27 como switch y controla la luz negra
-con la clase BlackLightControl. El control de porcentaje está invertido:
-100 % apaga la luz y 50 % representa la luz encendida.
+El relevador se activa al terminar la rampa de encendido y se desactiva al
+terminar la rampa de apagado. El PWM no esta invertido: 0 % es apagado y
+100 % es encendido para una etapa de potencia activa en alto.
 """
 
 import time
 from machine import Pin
-from lib.Neopixel.neopixel import Neopixel
 from lib.BlackLight.BlackLightControl import BlackLightControl
 
 
 BLACK_LIGHT_PIN = 16
-Relay_PIN = 17 
+RELAY_PIN = 17
 BLACK_LIGHT_FREQUENCY = 1000
 SWITCH_PIN = 0
 
@@ -25,21 +24,14 @@ WAKE_HOLD_SECONDS = 0.2
 SLEEP_HOLD_SECONDS = 0.2
 POLL_DELAY_SECONDS = 0.05
 
-orange = (255, 50, 0)
-yellow = (255, 150, 0)
-cian = (0, 255, 255)
-violet = (200, 0, 100)
-wite= (120,120,120)
-Off=(0,0,0)
-red = (255,0,0)
-green = (0, 255,0)
-blue = (0, 0, 255)
-
-
 bSensor = Pin(SWITCH_PIN, Pin.IN)
-qRelay = Pin(Relay_PIN, Pin.OUT)
+bRelay = Pin(RELAY_PIN, Pin.OUT, value=0)
 BlackLight = BlackLightControl(BLACK_LIGHT_PIN, BLACK_LIGHT_FREQUENCY)
-Ready = Neopixel(1, 1, 16, "GRB")
+
+
+def set_relay(active):
+    """Controla el relevador activo en alto: True enciende y False apaga."""
+    bRelay.value(1 if active else 0)
 
 
 def _ticks_ms():
@@ -53,23 +45,25 @@ def _elapsed_seconds(start_ticks):
 
 
 def fbiWakeUp():
-    """Enciende la luz con rampa de 0 % a 100 %."""
+    """Sube el PWM de 0 a 100 % y despues activa el relevador."""
     BlackLight.ramp_percent(
         RAMP_STEP_PERCENT,
         RAMP_TIME_SECONDS,
         start_percent=LIGHT_OFF_PERCENT,
         end_percent=LIGHT_ON_PERCENT,
-    )qRelay.value=1 "Enciende las luces generales"
+    )
+    set_relay(True)
 
 
 def fbiSleep():
-    """Apaga la luz con rampa de 100 % a 50 %."""
+    """Baja el PWM de 100 a 0 % y despues desactiva el relevador."""
     BlackLight.ramp_percent(
         RAMP_STEP_PERCENT,
         RAMP_TIME_SECONDS,
         start_percent=LIGHT_ON_PERCENT,
         end_percent=LIGHT_OFF_PERCENT,
-    )qRelay.value=0 "Apaga las luces generales"
+    )
+    set_relay(False)
 
 
 def wait_for_high_hold(hold_seconds):
@@ -95,32 +89,44 @@ def wait_for_low():
 
 
 def main():
-    """Ejecuta la secuencia alternando entre WakeUp y Sleep por GPIO 27."""
+    """Alterna encendido/apagado con activaciones del sensor en GP0."""
     light_is_on = False
+    set_relay(False)
     BlackLight.set_percent(LIGHT_OFF_PERCENT)
-    Ready.brightness(10)
-    Ready.fill(cian)
-    Ready.show()
 
     while True:
         if light_is_on:
             print("ON")
             wait_for_high_hold(SLEEP_HOLD_SECONDS)
             fbiSleep()
-            Ready.fill(red)
             light_is_on = False
             wait_for_low()
         else:
             print("OFF")
             wait_for_high_hold(WAKE_HOLD_SECONDS)
             fbiWakeUp()
-            Ready.fill(green)
             light_is_on = True
             wait_for_low()
-        Ready.show()
 
 
-try:
-    main()
-finally:
-    BlackLight.deinit()
+def shutdown():
+    """Apaga ambas salidas y libera el PWM, incluso si un apagado falla."""
+    try:
+        set_relay(False)
+    finally:
+        try:
+            BlackLight.set_percent(LIGHT_OFF_PERCENT)
+        finally:
+            BlackLight.deinit()
+
+
+def run():
+    """Ejecuta main y apaga las salidas ante una interrupcion o un error."""
+    try:
+        main()
+    finally:
+        shutdown()
+
+
+if __name__ == "__main__":
+    run()

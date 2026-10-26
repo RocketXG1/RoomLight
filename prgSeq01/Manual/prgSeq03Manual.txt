@@ -1,0 +1,206 @@
+MANUAL DE prgSeq03.py
+====================
+
+1. Proposito y archivos relacionados
+-----------------------------------
+prgSeq01/prgSeq03.py alterna entre encendido y apagado mediante un sensor
+digital. Controla una luz negra por PWM directo y un relevador digital.
+
+La secuencia usa la clase BlackLightControl definida en:
+  lib/BlackLight/BlackLightControl.py
+
+El nombre real del archivo y de la clase es BlackLightControl. Los metodos
+de esta biblioteca no se modificaron: la secuencia utiliza su conversion
+directa de porcentaje a duty y sus rampas bloqueantes existentes.
+
+Esta secuencia requiere MicroPython en una Raspberry Pi Pico/RP2040 y una
+etapa de potencia de luz negra y un relevador con control activo en alto.
+
+
+2. Asignacion de pines
+---------------------
+Funcion             Constante          Instancia     GPIO   Pin fisico Pico
+PWM de luz negra    BLACK_LIGHT_PIN    BlackLight    GP16   21
+Salida de relevador RELAY_PIN          bRelay        GP17   22
+Entrada de sensor   SWITCH_PIN         bSensor       GP0    1
+
+Los numeros usados por machine.Pin son numeros GPIO, no pines fisicos.
+La numeracion fisica indicada corresponde a la Raspberry Pi Pico de 40 pines.
+El PWM se configura a 1000 Hz mediante BLACK_LIGHT_FREQUENCY.
+
+Se retiro el indicador NeoPixel Ready de esta secuencia porque tambien
+utilizaba GP16. Ese pin queda dedicado al PWM; no debe conectarse al mismo
+tiempo como senal de datos de un NeoPixel. Los indicadores de las otras
+secuencias permanecen sin cambios.
+
+El sensor debe entregar una senal digital definida y compatible con 3.3 V.
+bSensor se configura como Pin.IN, sin resistencia pull interna. La secuencia
+interpreta nivel alto como activacion. El relevador y la luz se conectan por
+sus respectivas etapas de control; los GPIO no alimentan directamente cargas.
+
+
+3. PWM directo y diferencia con las secuencias anteriores
+--------------------------------------------------------
+BlackLightControl.set_percent(percent) limita el porcentaje al rango 0..100
+y calcula:
+
+  duty = int((percent / 100) * 65535)
+  self._pwm.duty_u16(duty)
+
+Porcentaje    Duty de 16 bits    Comportamiento de GP16
+0 %           0                 Nivel bajo continuo
+50 %          32767             Aproximadamente 50 % del tiempo en alto
+100 %         65535             Nivel alto continuo
+
+No se resta el porcentaje a 100 y no se invierte la senal en software.
+Para esta instalacion activa en alto:
+  LIGHT_OFF_PERCENT = 0: luz apagada.
+  LIGHT_ON_PERCENT = 100: luz encendida.
+
+Las secuencias anteriores usan porcentajes distintos porque su electronica
+esta documentada como inversa. No se cambiaron sus valores ni los metodos de
+la biblioteca. La relacion fisica entre duty y luz depende del circuito de
+potencia: un driver inversor requeriria otro comportamiento de la secuencia.
+
+
+4. Orden de encendido y apagado
+------------------------------
+Momento                 PWM GP16             Relevador GP17
+Inicio                  0 %                  0, apagado
+Rampa de encendido      0 -> 100 %            Permanece apagado
+Fin de fbiWakeUp        100 %                 1, encendido
+Espera encendido        100 %                 Permanece encendido
+Rampa de apagado        100 -> 0 %            Permanece encendido
+Fin de fbiSleep         0 %                   0, apagado
+Interrupcion o error    Se solicita 0 %       Se solicita 0
+
+fbiWakeUp() llama a BlackLight.ramp_percent(...) con inicio 0 y fin 100.
+Solo despues de que esa llamada termina ejecuta set_relay(True).
+
+fbiSleep() llama a BlackLight.ramp_percent(...) con inicio 100 y fin 0.
+Solo despues de que esa llamada termina ejecuta set_relay(False).
+
+ramp_percent es bloqueante: no regresa hasta aplicar el porcentaje final.
+Por ello, el cambio del relevador ocurre despues de completar la rampa.
+En operacion normal no hay activacion anticipada del relevador ni apagado
+del relevador mientras la luz esta bajando de intensidad.
+
+Ante una interrupcion o un error, run() ejecuta shutdown() para solicitar
+inmediatamente el apagado de ambas salidas, sin esperar una rampa adicional.
+
+
+5. Configuracion temporal y funcionamiento del sensor
+----------------------------------------------------
+RAMP_STEP_PERCENT = 1: variacion de un punto porcentual por paso.
+RAMP_TIME_SECONDS = 1: duracion nominal de cada rampa, aproximadamente 1 s.
+WAKE_HOLD_SECONDS = 0.2: activacion alta necesaria para encender.
+SLEEP_HOLD_SECONDS = 0.2: activacion alta necesaria para apagar.
+POLL_DELAY_SECONDS = 0.05: intervalo entre lecturas del sensor, 50 ms.
+
+El tiempo real incluye el costo de ejecucion y la resolucion de las esperas.
+
+Al iniciar, main() solicita relevador apagado y PWM al 0 %. El estado interno
+light_is_on comienza en False. El ciclo realiza lo siguiente:
+
+1. Imprime OFF mientras el estado interno esta apagado.
+2. wait_for_high_hold(0.2) espera que GP0 permanezca alto al menos 0.2 s.
+   Si vuelve a bajo antes de cumplir el tiempo, reinicia la cuenta.
+3. Ejecuta fbiWakeUp: rampa completa, seguida de activacion de bRelay.
+4. Marca light_is_on=True y espera que GP0 vuelva a bajo con wait_for_low().
+5. Imprime ON y espera otra activacion alta de al menos 0.2 s.
+6. Ejecuta fbiSleep: rampa completa, seguida de apagado de bRelay.
+7. Marca light_is_on=False y espera otra vez que GP0 vuelva a bajo.
+8. Repite el ciclo.
+
+Una senal que permanece alta no produce conmutaciones repetidas. Se necesita
+una liberacion a nivel bajo entre activaciones. No es un apagado automatico
+por tiempo: una activacion enciende y la siguiente apaga.
+
+_ticks_ms() usa time.ticks_ms(). _elapsed_seconds() usa time.ticks_diff()
+para calcular tiempo transcurrido respetando el desbordamiento del contador.
+
+Las esperas y las rampas son bloqueantes. Durante una rampa no se procesa
+otra deteccion ni se invierte la transicion; se conserva el funcionamiento
+de esta secuencia, sin introducir interrupciones ni cambiar la biblioteca.
+
+
+6. Funciones e instancias
+-------------------------
+bSensor = Pin(SWITCH_PIN, Pin.IN)
+  Entrada digital GP0 consultada por las funciones de espera.
+
+bRelay = Pin(RELAY_PIN, Pin.OUT, value=0)
+  Salida GP17 inicializada explicitamente apagada desde su creacion.
+
+BlackLight = BlackLightControl(BLACK_LIGHT_PIN, BLACK_LIGHT_FREQUENCY)
+  Instancia PWM GP16 a 1000 Hz. Su constructor ya aplica 0 %.
+
+set_relay(active)
+  Funcion auxiliar nueva: True escribe bRelay.value(1), False escribe
+  bRelay.value(0). value se invoca como metodo; no se reemplaza su atributo.
+
+fbiWakeUp() / fbiSleep()
+  Conservan sus nombres y parametros. Usan la rampa existente de la biblioteca
+  y coordinan despues el relevador mediante set_relay().
+
+wait_for_high_hold(hold_seconds) / wait_for_low()
+  Conservan la deteccion por nivel sostenido y la espera de liberacion.
+
+main()
+  Inicializa el estado y ejecuta el ciclo alternado de encendido/apagado.
+
+shutdown()
+  Funcion auxiliar nueva: solicita primero relevador apagado, despues PWM
+  al 0 %, y finalmente libera el PWM con BlackLight.deinit(). Los bloques
+  finally aseguran que se intenten las tres operaciones aunque una falle.
+  La desinicializacion por si sola no sustituye la solicitud explicita de 0 %.
+
+run()
+  Funcion auxiliar nueva: ejecuta main() dentro de try/finally para llamar
+  a shutdown() al salir, incluso por KeyboardInterrupt o una excepcion.
+
+No se agregaron metodos a BlackLightControl porque set_percent(),
+ramp_percent() y deinit() ya cubren este caso sin alterar otras secuencias.
+
+
+7. Ejecucion en la placa
+------------------------
+Conservar en la placa la ruta lib/BlackLight/BlackLightControl.py.
+Para arrancar automaticamente, desplegar esta secuencia como main.py en la
+raiz de la placa, conservando las bibliotecas. No confundirla con el archivo
+prgSeq01/main.py del repositorio, que contiene una secuencia diferente.
+
+Al ejecutar el archivo directamente, la condicion __name__ == "__main__"
+llama a run(). Si se importa como modulo, configura las instancias GPIO/PWM
+con salidas apagadas, pero no inicia el ciclo. Para ejecutarlo por importacion:
+
+  from prgSeq01 import prgSeq03
+  prgSeq03.run()
+
+Usar run() como entrada normal para asegurar la limpieza de las salidas al
+salir. main() implementa el ciclo, pero por si solo no incluye esa limpieza.
+
+La limpieza se ejecuta cuando Python puede procesar la salida o excepcion;
+no representa una garantia electrica ante perdida de alimentacion o fallo
+de hardware.
+
+
+8. Validacion
+-------------
+Las pruebas de software verifican conversion PWM directa, orden de la rampa
+y el relevador, deteccion del sensor y apagado ante interrupciones o errores
+con dobles de machine.Pin/PWM y un reloj controlado. No verifican niveles
+electricos, polaridad fisica del driver ni funcionamiento de la carga.
+
+Para ejecutarlas desde la raiz del repositorio, en Python de escritorio:
+
+  python3 -B -m unittest discover -s tests -v
+
+El archivo de pruebas es tests/test_prgseq03.py. No se despliega en la Pico.
+Para comprobar ademas la compilacion de la secuencia con mpy-cross:
+
+  mpy-cross -o /tmp/prgSeq03.mpy prgSeq01/prgSeq03.py
+
+En la Pico se debe comprobar que GP16 use la etapa activa en alto y GP17 el
+control activo en alto del relevador. Observar que la subida termine antes
+de activar GP17 y que la bajada termine antes de desactivarlo.
