@@ -6,6 +6,7 @@ terminar la rampa de apagado. El PWM no esta invertido: 0 % es apagado y
 """
 
 import time
+import rp2
 from machine import Pin
 from lib.BlackLight.BlackLightControl import BlackLightControl
 
@@ -14,6 +15,10 @@ BLACK_LIGHT_PIN = 16
 RELAY_PIN = 17
 BLACK_LIGHT_FREQUENCY = 1000
 SWITCH_PIN = 0
+STATUS_LED_PIN = 25
+STATUS_LED_SM_ID = 7
+STATUS_LED_PIO_HZ = 4000
+STATUS_LED_INTERVAL_MS = 500
 
 LIGHT_OFF_PERCENT = 0
 LIGHT_ON_PERCENT = 100
@@ -27,6 +32,21 @@ POLL_DELAY_SECONDS = 0.05
 bSensor = Pin(SWITCH_PIN, Pin.IN)
 bRelay = Pin(RELAY_PIN, Pin.OUT, value=0)
 BlackLight = BlackLightControl(BLACK_LIGHT_PIN, BLACK_LIGHT_FREQUENCY)
+
+
+@rp2.asm_pio(set_init=rp2.PIO.OUT_LOW)
+def _status_blink():
+    pull()
+    wrap_target()
+    set(pins, 1)
+    mov(x, osr)
+    label("on")
+    jmp(x_dec, "on")
+    set(pins, 0)
+    mov(x, osr)
+    label("off")
+    jmp(x_dec, "off")
+    wrap()
 
 
 def set_relay(active):
@@ -121,11 +141,24 @@ def shutdown():
 
 
 def run():
-    """Ejecuta main y apaga las salidas ante una interrupcion o un error."""
+    """Inicia el indicador PIO y ejecuta la secuencia con limpieza al salir."""
+    status_led = None
     try:
+        status_led = rp2.StateMachine(
+            STATUS_LED_SM_ID, _status_blink,
+            freq=STATUS_LED_PIO_HZ, set_base=Pin(STATUS_LED_PIN),
+        )
+        # Cada fase usa SET, MOV y (contador + 1) instrucciones JMP.
+        status_led.put(STATUS_LED_PIO_HZ * STATUS_LED_INTERVAL_MS // 1000 - 3)
+        status_led.active(1)
         main()
     finally:
-        shutdown()
+        try:
+            shutdown()
+        finally:
+            if status_led is not None:
+                status_led.active(0)
+                status_led.exec("set(pins, 0)")
 
 
 if __name__ == "__main__":
