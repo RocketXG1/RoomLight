@@ -23,10 +23,17 @@ Funcion             Constante          Instancia     GPIO   Pin fisico Pico
 PWM de luz negra    BLACK_LIGHT_PIN    BlackLight    GP16   21
 Salida de relevador RELAY_PIN          bRelay        GP17   22
 Entrada de sensor   SWITCH_PIN         bSensor       GP0    1
+LED integrado       STATUS_LED_PIN     status_led    GP25   LED de la placa
 
 Los numeros usados por machine.Pin son numeros GPIO, no pines fisicos.
 La numeracion fisica indicada corresponde a la Raspberry Pi Pico de 40 pines.
 El PWM se configura a 1000 Hz mediante BLACK_LIGHT_FREQUENCY.
+
+En la Raspberry Pi Pico con LED conectado a GP25, run() inicia el LED
+encendido. La maquina de estado PIO 7 alterna 500 ms encendido y 500 ms apagado,
+incluso durante las rampas y las esperas del sensor. Si se combina esta
+secuencia con otros programas PIO, reservar la maquina 7 para el LED.
+En la Pico W, el LED integrado se controla por el chip inalambrico.
 
 Se retiro el indicador NeoPixel Ready de esta secuencia porque tambien
 utilizaba GP16. Ese pin queda dedicado al PWM; no debe conectarse al mismo
@@ -156,8 +163,9 @@ shutdown()
   La desinicializacion por si sola no sustituye la solicitud explicita de 0 %.
 
 run()
-  Funcion auxiliar nueva: ejecuta main() dentro de try/finally para llamar
-  a shutdown() al salir, incluso por KeyboardInterrupt o una excepcion.
+  Arranca el indicador PIO y ejecuta main(). Al salir, incluso por
+  KeyboardInterrupt o una excepcion, llama a shutdown(), detiene la maquina
+  de estado y apaga el LED.
 
 No se agregaron metodos a BlackLightControl porque set_percent(),
 ramp_percent() y deinit() ya cubren este caso sin alterar otras secuencias.
@@ -188,9 +196,9 @@ de hardware.
 8. Validacion
 -------------
 Las pruebas de software verifican conversion PWM directa, orden de la rampa
-y el relevador, deteccion del sensor y apagado ante interrupciones o errores
-con dobles de machine.Pin/PWM y un reloj controlado. No verifican niveles
-electricos, polaridad fisica del driver ni funcionamiento de la carga.
+y el relevador, deteccion del sensor, arranque y parada del indicador PIO y
+apagado ante interrupciones o errores con dobles de hardware y un reloj
+controlado. Medir el parpadeo y verificar las salidas fisicas en la placa.
 
 Para ejecutarlas desde la raiz del repositorio, en Python de escritorio:
 

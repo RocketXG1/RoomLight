@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,12 +81,17 @@ class SequenceTests(unittest.TestCase):
         machine = types.ModuleType("machine")
         machine.Pin = Pin
         machine.PWM = PWM
+        self.status_led = Mock()
+        rp2 = types.ModuleType("rp2")
+        rp2.PIO = types.SimpleNamespace(OUT_LOW=0)
+        rp2.asm_pio = lambda **kwargs: lambda program: program
+        rp2.StateMachine = Mock(return_value=self.status_led)
         clock = types.ModuleType("time")
         clock.sleep = sleep
         clock.ticks_ms = lambda: self.now_ms
         clock.ticks_diff = lambda now, start: now - start
 
-        with patch.dict(sys.modules, {"machine": machine, "time": clock}):
+        with patch.dict(sys.modules, {"machine": machine, "rp2": rp2, "time": clock}):
             controller = load_module(
                 "_roomlight_controller_test", ROOT / "lib/BlackLight/BlackLightControl.py"
             )
@@ -109,6 +114,7 @@ class SequenceTests(unittest.TestCase):
         self.assertTrue(self.pwm.released)
 
     def test_pins_and_initial_outputs(self):
+        self.sequence.rp2.StateMachine.assert_not_called()
         self.assertEqual(set(self.pins), {0, 16, 17})
         self.assertEqual(self.pins[0].mode, self.pins[0].IN)
         self.assertEqual(self.pins[17].mode, self.pins[17].OUT)
@@ -118,6 +124,24 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(self.pins[17].level, 0)
         self.assertEqual(self.pwm.duty, 0)
         self.assertFalse(self.pwm.released)
+
+    def test_run_starts_status_led_before_main_and_turns_it_off_on_exit(self):
+        def interrupt_main():
+            self.sequence.rp2.StateMachine.assert_called_once_with(
+                7, self.sequence._status_blink, freq=4000, set_base=self.pins[25]
+            )
+            self.assertEqual(self.status_led.mock_calls, [call.put(1997), call.active(1)])
+            raise KeyboardInterrupt()
+
+        with patch.object(self.sequence, "main", side_effect=interrupt_main):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_quietly()
+
+        self.assertEqual(
+            self.status_led.mock_calls,
+            [call.put(1997), call.active(1), call.active(0), call.exec("set(pins, 0)")],
+        )
+        self.assert_outputs_off()
 
     def test_controller_pwm_is_not_inverted(self):
         self.events.clear()
